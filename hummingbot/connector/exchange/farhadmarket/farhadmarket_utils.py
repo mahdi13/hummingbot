@@ -1,0 +1,46 @@
+from hummingbot.core.utils.tracking_nonce import get_tracking_nonce
+
+from hummingbot.client.config.config_var import ConfigVar
+from hummingbot.client.config.config_methods import using_exchange
+
+CENTRALIZED = True
+
+EXAMPLE_PAIR = "ETH-USDT"
+
+DEFAULT_FEES = [0.2, 0.4]
+
+
+# Request ID class
+class RequestId:
+    """
+    Generate request ids
+    """
+    _request_id: int = 0
+
+    @classmethod
+    def generate_request_id(cls) -> int:
+        return get_tracking_nonce()
+
+
+def convert_from_exchange_trading_pair(exchange_trading_pair: str) -> str:
+    return exchange_trading_pair.replace("_", "-")
+
+
+def convert_to_exchange_trading_pair(hb_trading_pair: str) -> str:
+    return hb_trading_pair.replace("-", "_")
+
+
+KEYS = {
+    "farhadmarket_api_key":
+        ConfigVar(key="farhadmarket_api_key",
+                  prompt="Enter your farhadmarket.com API key >>> ",
+                  required_if=using_exchange("farhadmarket"),
+                  is_secure=True,
+                  is_connect_key=True),
+    "farhadmarket_secret_key":
+        ConfigVar(key="farhadmarket_secret_key",
+                  prompt="Enter your farhadmarket.com secret key >>> ",
+                  required_if=using_exchange("farhadmarket"),
+                  is_secure=True,
+                  is_connect_key=True),
+}

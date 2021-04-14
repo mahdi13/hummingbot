@@ -29,7 +29,8 @@ connector_status = {
     'probit': 'yellow',
     'probit_kr': 'yellow',
     'terra': 'green',
-    'uniswap': 'green'
+    'uniswap': 'green',
+    'farhadmarket': 'yellow'
 }
 
 warning_messages = {

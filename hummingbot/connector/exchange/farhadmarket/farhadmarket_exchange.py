@@ -248,51 +248,30 @@ class FarhadmarketExchange(ExchangeBase):
             except Exception as e:
                 self.logger().network(f"Unexpected error while fetching trading rules. Error: {str(e)}",
                                       exc_info=True,
-                                      app_warning_msg="Could not fetch new trading rules from Crypto.com. "
+                                      app_warning_msg="Could not fetch new trading rules from farhadmarket.com. "
                                                       "Check network connection.")
                 await asyncio.sleep(0.5)
 
     async def _update_trading_rules(self):
-        instruments_info = await self._api_request("get", path_url="public/get-instruments")
+        markets = await self._api_request("GET", path_url="markets")
+        currencies = await self._api_request("GET", path_url="currencies")
         self._trading_rules.clear()
-        self._trading_rules = self._format_trading_rules(instruments_info)
+        self._trading_rules = self._format_trading_rules({"markets": markets, "currencies": currencies})
 
     def _format_trading_rules(self, instruments_info: Dict[str, Any]) -> Dict[str, TradingRule]:
         """
         Converts json API response into a dictionary of trading rules.
         :param instruments_info: The json API response
         :return A dictionary of trading rules.
-        Response Example:
-        {
-            "id": 11,
-            "method": "public/get-instruments",
-            "code": 0,
-            "result": {
-                "instruments": [
-                      {
-                        "instrument_name": "ETH_CRO",
-                        "quote_currency": "CRO",
-                        "base_currency": "ETH",
-                        "price_decimals": 2,
-                        "quantity_decimals": 2
-                      },
-                      {
-                        "instrument_name": "CRO_BTC",
-                        "quote_currency": "BTC",
-                        "base_currency": "CRO",
-                        "price_decimals": 8,
-                        "quantity_decimals": 2
-                      }
-                    ]
-              }
-        }
         """
+        currencies = {c["symbol"]: c for c in instruments_info["currencies"]}
+        markets = instruments_info["markets"]
         result = {}
-        for rule in instruments_info["result"]["instruments"]:
+        for market in markets:
             try:
-                trading_pair = farhadmarket_utils.convert_from_exchange_trading_pair(rule["instrument_name"])
-                price_decimals = Decimal(str(rule["price_decimals"]))
-                quantity_decimals = Decimal(str(rule["quantity_decimals"]))
+                trading_pair = farhadmarket_utils.convert_from_exchange_trading_pair(market["name"])
+                price_decimals = Decimal(str(-currencies[market["baseCurrencySymbol"]]["normalizationScale"]))
+                quantity_decimals = Decimal(str(-currencies[market["quoteCurrencySymbol"]]["normalizationScale"]))
                 # E.g. a price decimal of 2 means 0.01 incremental.
                 price_step = Decimal("1") / Decimal(str(math.pow(10, price_decimals)))
                 quantity_step = Decimal("1") / Decimal(str(math.pow(10, quantity_decimals)))
@@ -300,7 +279,7 @@ class FarhadmarketExchange(ExchangeBase):
                                                    min_price_increment=price_step,
                                                    min_base_amount_increment=quantity_step)
             except Exception:
-                self.logger().error(f"Error parsing the trading pair rule {rule}. Skipping.", exc_info=True)
+                self.logger().error(f"Error parsing the trading pair rule {market}. Skipping.", exc_info=True)
         return result
 
     async def _api_request(self,
@@ -319,31 +298,23 @@ class FarhadmarketExchange(ExchangeBase):
         url = f"{Constants.REST_URL}/{path_url}"
         client = await self._http_client()
         if is_auth_required:
-            request_id = farhadmarket_utils.RequestId.generate_request_id()
-            data = {"params": params}
-            params = self._farhadmarket_auth.generate_auth_dict(path_url, request_id,
-                                                                farhadmarket_utils.get_ms_timestamp(), data)
             headers = self._farhadmarket_auth.get_headers()
         else:
-            headers = {"Content-Type": "application/json"}
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-        if method == "get":
-            response = await client.get(url, headers=headers)
-        elif method == "post":
-            post_json = json.dumps(params)
-            response = await client.post(url, data=post_json, headers=headers)
+        if method.lower() == "create":
+            response = await client.request(method.upper(), url, data=params, headers=headers)
         else:
-            raise NotImplementedError
+            response = await client.request(method.upper(), url, params=params, headers=headers)
 
         try:
-            parsed_response = json.loads(await response.text())
+            raw_response = await response.text()
+            parsed_response = json.loads(raw_response)
         except Exception as e:
             raise IOError(f"Error parsing data from {url}. Error: {str(e)}")
         if response.status != 200:
             raise IOError(f"Error fetching data from {url}. HTTP status is {response.status}. "
                           f"Message: {parsed_response}")
-        if parsed_response["code"] != 0:
-            raise IOError(f"{url} API call failed, response: {parsed_response}")
         # print(f"REQUEST: {method} {path_url} {params}")
         # print(f"RESPONSE: {parsed_response}")
         return parsed_response
@@ -432,15 +403,13 @@ class FarhadmarketExchange(ExchangeBase):
         if amount < trading_rule.min_order_size:
             raise ValueError(f"Buy order amount {amount} is lower than the minimum order size "
                              f"{trading_rule.min_order_size}.")
-        api_params = {"instrument_name": farhadmarket_utils.convert_to_exchange_trading_pair(trading_pair),
-                      "side": trade_type.name,
-                      "type": "LIMIT",
+        api_params = {"marketName": farhadmarket_utils.convert_to_exchange_trading_pair(trading_pair),
+                      "side": trade_type.name.lower(),
+                      "type": "limit",
                       "price": f"{price:f}",
-                      "quantity": f"{amount:f}",
-                      "client_oid": order_id
+                      "amount": f"{amount:f}",
+                      # "client_oid": order_id
                       }
-        if order_type is OrderType.LIMIT_MAKER:
-            api_params["exec_inst"] = "POST_ONLY"
         self.start_tracking_order(order_id,
                                   None,
                                   trading_pair,
@@ -450,8 +419,8 @@ class FarhadmarketExchange(ExchangeBase):
                                   order_type
                                   )
         try:
-            order_result = await self._api_request("post", "private/create-order", api_params, True)
-            exchange_order_id = str(order_result["result"]["order_id"])
+            order_result = await self._api_request("CREATE", "orders", api_params, True)
+            exchange_order_id = str(order_result["id"])
             tracked_order = self._in_flight_orders.get(order_id)
             if tracked_order is not None:
                 self.logger().info(f"Created {order_type.name} {trade_type.name} order {order_id} for "
@@ -474,7 +443,7 @@ class FarhadmarketExchange(ExchangeBase):
         except Exception as e:
             self.stop_tracking_order(order_id)
             self.logger().network(
-                f"Error submitting {trade_type.name} {order_type.name} order to Crypto.com for "
+                f"Error submitting {trade_type.name} {order_type.name} order to farhadmarket.com for "
                 f"{amount} {trading_pair} "
                 f"{price}.",
                 exc_info=True,
@@ -527,10 +496,9 @@ class FarhadmarketExchange(ExchangeBase):
                 await tracked_order.get_exchange_order_id()
             ex_order_id = tracked_order.exchange_order_id
             await self._api_request(
-                "post",
-                "private/cancel-order",
-                {"instrument_name": farhadmarket_utils.convert_to_exchange_trading_pair(trading_pair),
-                 "order_id": ex_order_id},
+                "CANCEL",
+                f"orders/{ex_order_id}",
+                {"marketName": farhadmarket_utils.convert_to_exchange_trading_pair(trading_pair)},
                 True
             )
             return order_id
@@ -540,7 +508,7 @@ class FarhadmarketExchange(ExchangeBase):
             self.logger().network(
                 f"Failed to cancel order {order_id}: {str(e)}",
                 exc_info=True,
-                app_warning_msg=f"Failed to cancel the order {order_id} on CryptoCom. "
+                app_warning_msg=f"Failed to cancel the order {order_id} on farhadmarket. "
                                 f"Check API key and network connection."
             )
 
@@ -564,7 +532,7 @@ class FarhadmarketExchange(ExchangeBase):
                 self.logger().error(str(e), exc_info=True)
                 self.logger().network("Unexpected error while fetching account updates.",
                                       exc_info=True,
-                                      app_warning_msg="Could not fetch account updates from Crypto.com. "
+                                      app_warning_msg="Could not fetch account updates from farhadmarket.com. "
                                                       "Check API key and network connection.")
                 await asyncio.sleep(0.5)
 
@@ -600,7 +568,10 @@ class FarhadmarketExchange(ExchangeBase):
                 order_id = await tracked_order.get_exchange_order_id()
                 tasks.append(self._api_request("GET",
                                                f"orders/{order_id}",
-                                               {},
+                                               {"status": "pending",
+                                                "limit": 100,
+                                                "offset": 0
+                                                },
                                                True))
             self.logger().debug(f"Polling for order status updates of {len(tasks)} orders.")
             responses = await safe_gather(*tasks, return_exceptions=True)
@@ -704,13 +675,20 @@ class FarhadmarketExchange(ExchangeBase):
             raise Exception("cancel_all can only be used when trading_pairs are specified.")
         cancellation_results = []
         try:
-            for trading_pair in self._trading_pairs:
-                await self._api_request(
-                    "post",
-                    "private/cancel-all-orders",
-                    {"instrument_name": farhadmarket_utils.convert_to_exchange_trading_pair(trading_pair)},
-                    True
-                )
+
+            # Farhadmarket does not have cancel_all_order endpoint
+            tasks = []
+            for tracked_order in self.in_flight_orders.values():
+                body_params = {"marketName": tracked_order.trading_pair}
+                tasks.append(self._api_request(
+                    method="CANCEL",
+                    path_url=f"orders/{tracked_order.exchange_order_id}",
+                    params=body_params,
+                    is_auth_required=True
+                ))
+
+            await safe_gather(*tasks)
+
             open_orders = await self.get_open_orders()
             for cl_order_id, tracked_order in self._in_flight_orders.items():
                 open_order = [o for o in open_orders if o.client_order_id == cl_order_id]
@@ -724,7 +702,7 @@ class FarhadmarketExchange(ExchangeBase):
             self.logger().network(
                 "Failed to cancel all orders.",
                 exc_info=True,
-                app_warning_msg="Failed to cancel all orders on Crypto.com. Check API key and network connection."
+                app_warning_msg="Failed to cancel all orders on ProBit. Check API key and network connection."
             )
         return cancellation_results
 
@@ -769,14 +747,14 @@ class FarhadmarketExchange(ExchangeBase):
                 self.logger().network(
                     "Unknown error. Retrying after 1 seconds.",
                     exc_info=True,
-                    app_warning_msg="Could not fetch user events from CryptoCom. Check API key and network connection."
+                    app_warning_msg="Could not fetch user events from Farhadmarket. Check API key and network connection."
                 )
                 await asyncio.sleep(1.0)
 
     async def _user_stream_event_listener(self):
         """
         Listens to message in _user_stream_tracker.user_stream queue. The messages are put in by
-        CryptoComAPIUserStreamDataSource.
+        FarhadmarketAPIUserStreamDataSource.
         """
         async for event_message in self._iter_user_event_queue():
             try:
@@ -802,30 +780,36 @@ class FarhadmarketExchange(ExchangeBase):
                 await asyncio.sleep(5.0)
 
     async def get_open_orders(self) -> List[OpenOrder]:
-        result = await self._api_request(
-            "post",
-            "private/get-open-orders",
-            {},
-            True
-        )
+        if self._trading_pairs is None:
+            raise Exception("cancel_all can only be used when trading_pairs are specified.")
         ret_val = []
-        for order in result["result"]["order_list"]:
-            if farhadmarket_utils.HBOT_BROKER_ID not in order["client_oid"]:
-                continue
-            if order["type"] != "LIMIT":
-                raise Exception(f"Unsupported order type {order['type']}")
-            ret_val.append(
-                OpenOrder(
-                    client_order_id=order["client_oid"],
-                    trading_pair=farhadmarket_utils.convert_from_exchange_trading_pair(order["instrument_name"]),
-                    price=Decimal(str(order["price"])),
-                    amount=Decimal(str(order["quantity"])),
-                    executed_amount=Decimal(str(order["cumulative_quantity"])),
-                    status=order["status"],
-                    order_type=OrderType.LIMIT,
-                    is_buy=True if order["side"].lower() == "buy" else False,
-                    time=int(order["create_time"]),
-                    exchange_order_id=order["order_id"]
-                )
+        for trading_pair in self._trading_pairs:
+            trading_pair = farhadmarket_utils.convert_to_exchange_trading_pair(trading_pair)
+            result = await self._api_request(
+                "GET",
+                "orders",
+                {
+                    "status": "pending",
+                    "marketName": trading_pair,
+                    "offset": 0,
+                    "limit": 100
+                },
+                True
             )
+            ret_val = []
+            for order in result:
+                ret_val.append(
+                    OpenOrder(
+                        client_order_id=None,
+                        trading_pair=farhadmarket_utils.convert_from_exchange_trading_pair(order["market"]),
+                        price=Decimal(str(order["price"])),
+                        amount=Decimal(str(order["amount"])),
+                        executed_amount=Decimal(str(order["filledStock"])),
+                        status="open",
+                        order_type=OrderType.LIMIT,
+                        is_buy=True if order["side"].lower() == "buy" else False,
+                        time=int(order["createdAt"]),
+                        exchange_order_id=order["id"]
+                    )
+                )
         return ret_val

@@ -5,6 +5,7 @@ import asyncio
 import logging
 from typing import Optional, List, AsyncIterable, Any
 from hummingbot.core.data_type.user_stream_tracker_data_source import UserStreamTrackerDataSource
+from hummingbot.core.utils.async_utils import safe_gather
 from hummingbot.logger import HummingbotLogger
 from .farhadmarket_auth import FarhadmarketAuth
 from .farhadmarket_websocket import FarhadmarketWebsocket
@@ -22,8 +23,8 @@ class FarhadmarketAPIUserStreamDataSource(UserStreamTrackerDataSource):
             cls._logger = logging.getLogger(__name__)
         return cls._logger
 
-    def __init__(self, crypto_com_auth: FarhadmarketAuth, trading_pairs: Optional[List[str]] = []):
-        self._crypto_com_auth: FarhadmarketAuth = crypto_com_auth
+    def __init__(self, farhadmarket_auth: FarhadmarketAuth, trading_pairs: Optional[List[str]] = []):
+        self._farhadmarket_auth: FarhadmarketAuth = farhadmarket_auth
         self._trading_pairs = trading_pairs
         self._current_listen_key = None
         self._listen_for_user_stream_task = None
@@ -40,14 +41,18 @@ class FarhadmarketAPIUserStreamDataSource(UserStreamTrackerDataSource):
         """
 
         try:
-            ws = FarhadmarketWebsocket(self._crypto_com_auth)
+            ws = FarhadmarketWebsocket(self._farhadmarket_auth)
             await ws.connect()
-            await ws.subscribe(["user.order", "user.trade", "user.balance"])
+            await safe_gather(
+                ws.subscribe("self.deals", {}),
+                ws.subscribe("self.orders", {}),
+                ws.subscribe("self.balance", {})
+            )
             async for msg in ws.on_message():
                 # print(f"WS_SOCKET: {msg}")
                 yield msg
                 self._last_recv_time = time.time()
-                if (msg.get("result") is None):
+                if msg.get("result") is None:
                     continue
         except Exception as e:
             raise e
@@ -71,6 +76,7 @@ class FarhadmarketAPIUserStreamDataSource(UserStreamTrackerDataSource):
                 raise
             except Exception:
                 self.logger().error(
-                    "Unexpected error with Farhadmarket WebSocket connection. " "Retrying after 30 seconds...", exc_info=True
+                    "Unexpected error with Farhadmarket WebSocket connection. " "Retrying after 30 seconds...",
+                    exc_info=True
                 )
                 await asyncio.sleep(30.0)

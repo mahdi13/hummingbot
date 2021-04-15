@@ -760,19 +760,32 @@ class FarhadmarketExchange(ExchangeBase):
             try:
                 if "result" not in event_message or "channel" not in event_message["result"]:
                     continue
-                channel = event_message["result"]["channel"]
-                if "user.trade" in channel:
-                    for trade_msg in event_message["result"]["data"]:
-                        await self._process_trade_message(trade_msg)
-                elif "user.order" in channel:
-                    for order_msg in event_message["result"]["data"]:
-                        self._process_order_message(order_msg)
-                elif channel == "user.balance":
-                    balances = event_message["result"]["data"]
-                    for balance_entry in balances:
-                        asset_name = balance_entry["currency"]
-                        self._account_balances[asset_name] = Decimal(str(balance_entry["balance"]))
-                        self._account_available_balances[asset_name] = Decimal(str(balance_entry["available"]))
+                event = event_message["event"]
+                channel = event_message["channel"]
+                body = event_message.get("body", None)
+                # reason = event_message.get("reason", None)
+                if channel == "self.deals":
+                    if event in ["subscribed", "unsubscribed"]:
+                        pass
+                    elif event in ["init", "update", "insert"]:
+                        for trade_msg in body:
+                            await self._process_trade_message(trade_msg)
+                elif channel == "self.orders":
+                    if event in ["subscribed", "unsubscribed"]:
+                        pass
+                    elif event in ["init", "insert"]:
+                        for order_msg in body:
+                            self._process_order_message(order_msg)
+                elif channel == "self.balances":
+                    if event in ["subscribed", "unsubscribed"]:
+                        pass
+                    elif event in ["init", "update"]:
+                        for balance_entry in body:
+                            asset_name = balance_entry["name"]
+                            freeze = Decimal(str(balance_entry["freeze"]))
+                            available = Decimal(str(balance_entry["available"]))
+                            self._account_balances[asset_name] = available + freeze
+                            self._account_available_balances[asset_name] = available
             except asyncio.CancelledError:
                 raise
             except Exception:

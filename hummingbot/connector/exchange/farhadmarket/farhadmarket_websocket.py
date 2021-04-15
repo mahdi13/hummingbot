@@ -42,7 +42,7 @@ class FarhadmarketWebsocket(RequestId):
             # if auth class was passed into websocket class
             # we need to emit authenticated requests
             if self._isPrivate:
-                await self._emit("public/auth", None)
+                await self._emit("authenticate", "self.session", self._auth.get_ws_parameters())
                 # TODO: wait for response
                 await asyncio.sleep(1)
 
@@ -79,49 +79,31 @@ class FarhadmarketWebsocket(RequestId):
             await self.disconnect()
 
     # emit messages
-    async def _emit(self, method: str, data: Optional[Any] = {}) -> int:
+    async def _emit(self, method: str, channel: str, data: dict) -> int:
         id = self.generate_request_id()
 
         payload = {
-            "id": id,
             "action": method,
-            "channel": data.get("channel"),
-            "params": copy.deepcopy(data.get("params")),
+            "channel": channel,
+            "params": copy.deepcopy(data),
         }
 
-        if self._isPrivate:
-            raise NotImplementedError()
-            # auth = self._auth.generate_auth_dict(
-            #     method,
-            #     request_id=id,
-            #     nonce=nonce,
-            #     data=data,
-            # )
-            #
-            # payload["sig"] = auth["sig"]
-            # payload["api_key"] = auth["api_key"]
-
         await self._client.send(ujson.dumps(payload))
+        self.logger().info(f"Message emitted: {payload}")
 
         return id
 
     # request via websocket
-    async def request(self, method: str, data: Optional[Any] = {}) -> int:
-        return await self._emit(method, data)
+    async def request(self, method: str, channel, data: Optional[Any] = {}) -> int:
+        return await self._emit(method, channel, data)
 
     # subscribe to a method
     async def subscribe(self, channel: str, params: dict) -> int:
-        return await self.request("subscribe", {
-            "channel": channel,
-            "params": params,
-        })
+        return await self.request("subscribe", channel, params)
 
     # unsubscribe to a method
     async def unsubscribe(self, channel: str, params: dict) -> int:
-        return await self.request("unsubscribe", {
-            "channel": channel,
-            "params": params,
-        })
+        return await self.request("unsubscribe", channel, params)
 
     # listen to messages by method
     async def on_message(self) -> AsyncIterable[Any]:

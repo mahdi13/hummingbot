@@ -20,3 +20,13 @@ class FarhadmarketAuth():
             "X-API-SECRET": self.secret_key,
             "Content-Type": "application/x-www-form-urlencoded",
         }
+
+    def get_ws_parameters(self) -> Dict[str, Any]:
+        """
+        Generates authentication payload required by farhadmarket ws
+        :return: a dictionary of auth parameters
+        """
+        return {
+            "apiKey": self.api_key,
+            "apiSecret": self.secret_key,
+        }

@@ -270,8 +270,8 @@ class FarhadmarketExchange(ExchangeBase):
         for market in markets:
             try:
                 trading_pair = farhadmarket_utils.convert_from_exchange_trading_pair(market["name"])
-                price_decimals = Decimal(str(-currencies[market["baseCurrencySymbol"]]["normalizationScale"]))
-                quantity_decimals = Decimal(str(-currencies[market["quoteCurrencySymbol"]]["normalizationScale"]))
+                price_decimals = Decimal(str(-currencies[market["quoteCurrencySymbol"]]["smallestUnitScale"]))
+                quantity_decimals = Decimal(str(-currencies[market["baseCurrencySymbol"]]["smallestUnitScale"]))
                 # E.g. a price decimal of 2 means 0.01 incremental.
                 price_step = Decimal("1") / Decimal(str(math.pow(10, price_decimals)))
                 quantity_step = Decimal("1") / Decimal(str(math.pow(10, quantity_decimals)))
@@ -702,7 +702,7 @@ class FarhadmarketExchange(ExchangeBase):
             self.logger().network(
                 "Failed to cancel all orders.",
                 exc_info=True,
-                app_warning_msg="Failed to cancel all orders on ProBit. Check API key and network connection."
+                app_warning_msg="Failed to cancel all orders on Farhadmarket. Check API key and network connection."
             )
         return cancellation_results
 

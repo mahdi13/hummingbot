@@ -11,6 +11,8 @@ EXAMPLE_PAIR = "ETH-USDT"
 
 DEFAULT_FEES = [0.2, 0.4]
 
+HBOT_BROKER_ID = "HBOT-"
+
 
 # convert milliseconds timestamp to seconds
 def ms_timestamp_to_s(ms: int) -> int:
@@ -27,6 +29,11 @@ class RequestId:
     @classmethod
     def generate_request_id(cls) -> int:
         return get_tracking_nonce()
+
+
+def get_new_client_order_id(is_buy: bool, trading_pair: str) -> str:
+    side = "B" if is_buy else "S"
+    return f"{HBOT_BROKER_ID}{side}-{trading_pair}-{get_tracking_nonce()}"
 
 
 # get timestamp in milliseconds

@@ -4,6 +4,7 @@ from hummingbot.core.utils.tracking_nonce import get_tracking_nonce, get_trackin
 
 from hummingbot.client.config.config_var import ConfigVar
 from hummingbot.client.config.config_methods import using_exchange
+from dateutil.parser import parse as dataparse
 
 CENTRALIZED = True
 
@@ -39,6 +40,10 @@ def get_new_client_order_id(is_buy: bool, trading_pair: str) -> str:
 # get timestamp in milliseconds
 def get_ms_timestamp() -> int:
     return get_tracking_nonce_low_res()
+
+
+def iso_to_ms_timestamp(date: str):
+    return dataparse(date).timestamp()
 
 
 def convert_from_exchange_trading_pair(exchange_trading_pair: str) -> str:

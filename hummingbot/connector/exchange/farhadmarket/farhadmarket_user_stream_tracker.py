@@ -23,13 +23,13 @@ import hummingbot.connector.exchange.farhadmarket.farhadmarket_constants as cons
 
 
 class FarhadmarketUserStreamTracker(UserStreamTracker):
-    _cbpust_logger: Optional[HummingbotLogger] = None
+    _fmust_logger: Optional[HummingbotLogger] = None
 
     @classmethod
     def logger(cls) -> HummingbotLogger:
-        if cls._bust_logger is None:
-            cls._bust_logger = logging.getLogger(__name__)
-        return cls._bust_logger
+        if cls._fmust_logger is None:
+            cls._fmust_logger = logging.getLogger(__name__)
+        return cls._fmust_logger
 
     def __init__(self,
                  farhadmarket_auth: Optional[FarhadmarketAuth] = None,
@@ -43,31 +43,16 @@ class FarhadmarketUserStreamTracker(UserStreamTracker):
 
     @property
     def data_source(self) -> UserStreamTrackerDataSource:
-        """
-        *required
-        Initializes a user stream data source (user specific order diffs from live socket stream)
-        :return: OrderBookTrackerDataSource
-        """
         if not self._data_source:
             self._data_source = FarhadmarketAPIUserStreamDataSource(
-                farhadmarket_auth=self._farhadmarket_auth,
-                trading_pairs=self._trading_pairs
-            )
+                farhadmarket_auth=self._farhadmarket_auth, trading_pairs=self._trading_pairs)
         return self._data_source
 
     @property
     def exchange_name(self) -> str:
-        """
-        *required
-        Name of the current exchange
-        """
         return constants.EXCHANGE_NAME
 
     async def start(self):
-        """
-        *required
-        Start all listeners and tasks
-        """
         self._user_stream_tracking_task = safe_ensure_future(
             self.data_source.listen_for_user_stream(self._ev_loop, self._user_stream)
         )

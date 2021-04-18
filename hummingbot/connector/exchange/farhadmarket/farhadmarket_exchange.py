@@ -277,7 +277,8 @@ class FarhadmarketExchange(ExchangeBase):
                 quantity_step = Decimal("1") / Decimal(str(math.pow(10, quantity_decimals)))
                 result[trading_pair] = TradingRule(trading_pair,
                                                    min_price_increment=price_step,
-                                                   min_base_amount_increment=quantity_step)
+                                                   min_base_amount_increment=quantity_step,
+                                                   min_order_size=Decimal(str(market["minAmount"])))
             except Exception:
                 self.logger().error(f"Error parsing the trading pair rule {market}. Skipping.", exc_info=True)
         return result
@@ -307,14 +308,17 @@ class FarhadmarketExchange(ExchangeBase):
         else:
             response = await client.request(method.upper(), url, params=params, headers=headers)
 
+        self.logger().info(f"API call {url}, {params}.")
+        raw_response = None
         try:
             raw_response = await response.text()
             parsed_response = json.loads(raw_response)
         except Exception as e:
-            raise IOError(f"Error parsing data from {url}. Error: {str(e)}")
+            raise IOError(f"Error parsing data from {url}. Error: {str(e)}. Raw response: {raw_response}")
         if response.status != 200:
+            reason = response.headers.get('x-reason', None)
             raise IOError(f"Error fetching data from {url}. HTTP status is {response.status}. "
-                          f"Message: {parsed_response}")
+                          f"Message: {parsed_response}: {reason}")
         # print(f"REQUEST: {method} {path_url} {params}")
         # print(f"RESPONSE: {parsed_response}")
         return parsed_response
@@ -419,6 +423,7 @@ class FarhadmarketExchange(ExchangeBase):
                                   order_type
                                   )
         try:
+            self.logger().info(f"Trying to create order with params {api_params}.")
             order_result = await self._api_request("CREATE", "orders", api_params, True)
             exchange_order_id = str(order_result["id"])
             tracked_order = self._in_flight_orders.get(order_id)
@@ -566,11 +571,11 @@ class FarhadmarketExchange(ExchangeBase):
             tasks = []
             for tracked_order in tracked_orders:
                 order_id = await tracked_order.get_exchange_order_id()
+                trading_pair = farhadmarket_utils.convert_to_exchange_trading_pair(tracked_order.trading_pair)
                 tasks.append(self._api_request("GET",
                                                f"orders/{order_id}",
                                                {"status": "pending",
-                                                "limit": 100,
-                                                "offset": 0
+                                                "marketName": trading_pair
                                                 },
                                                True))
             self.logger().debug(f"Polling for order status updates of {len(tasks)} orders.")
@@ -579,22 +584,32 @@ class FarhadmarketExchange(ExchangeBase):
                 if isinstance(response, Exception):
                     raise response
                 result = response
-                if "trade_list" in result:
-                    for trade_msg in result["trade_list"]:
-                        await self._process_trade_message(trade_msg)
-                self._process_order_message(result["order_info"])
+                # if "trade_list" in result:
+                #     for trade_msg in result["trade_list"]:
+                #         await self._process_trade_message(trade_msg)
+                self._process_order_message(result)
 
     def _process_order_message(self, order_msg: Dict[str, Any]):
         """
         Updates in-flight order and triggers cancellation or failure event if needed.
         :param order_msg: The order response from either REST or web socket API (they are of the same format)
         """
-        client_order_id = order_msg["client_oid"]
+        # # TODO:
+        # client_order_id = order_msg["client_oid"]
+        self.logger().info(f"_process_order_message: {order_msg}")
+        exchange_order_id = str(order_msg["id"])
+        client_order_id = None
+
+        for in_flight_order in self._in_flight_orders.values():
+            if str(in_flight_order.exchange_order_id) == exchange_order_id:
+                client_order_id = in_flight_order.client_order_id
+
         if client_order_id not in self._in_flight_orders:
             return
+
         tracked_order = self._in_flight_orders[client_order_id]
         # Update order execution status
-        tracked_order.last_state = order_msg["status"]
+        tracked_order.last_state = FarhadmarketInFlightOrder.parse_status(order_msg)
         if tracked_order.is_cancelled:
             self.logger().info(f"Successfully cancelled order {client_order_id}.")
             self.trigger_event(MarketEvent.OrderCancelled,
@@ -621,7 +636,7 @@ class FarhadmarketExchange(ExchangeBase):
         """
         for order in self._in_flight_orders.values():
             await order.get_exchange_order_id()
-        track_order = [o for o in self._in_flight_orders.values() if trade_msg["order_id"] == o.exchange_order_id]
+        track_order = [o for o in self._in_flight_orders.values() if trade_msg["orderId"] == o.exchange_order_id]
         if not track_order:
             return
         tracked_order = track_order[0]
@@ -636,10 +651,10 @@ class FarhadmarketExchange(ExchangeBase):
                 tracked_order.trading_pair,
                 tracked_order.trade_type,
                 tracked_order.order_type,
-                Decimal(str(trade_msg["traded_price"])),
-                Decimal(str(trade_msg["traded_quantity"])),
-                TradeFee(0.0, [(trade_msg["fee_currency"], Decimal(str(trade_msg["fee"])))]),
-                exchange_trade_id=trade_msg["order_id"]
+                Decimal(str(trade_msg["price"])),
+                Decimal(str(trade_msg["amount"])),
+                TradeFee(Decimal(0)),  # TODO
+                exchange_trade_id=trade_msg["orderId"]
             )
         )
         if math.isclose(tracked_order.executed_amount_base, tracked_order.amount) or \
@@ -679,7 +694,9 @@ class FarhadmarketExchange(ExchangeBase):
             # Farhadmarket does not have cancel_all_order endpoint
             tasks = []
             for tracked_order in self.in_flight_orders.values():
-                body_params = {"marketName": tracked_order.trading_pair}
+                body_params = {
+                    "marketName": farhadmarket_utils.convert_to_exchange_trading_pair(tracked_order.trading_pair)
+                }
                 tasks.append(self._api_request(
                     method="CANCEL",
                     path_url=f"orders/{tracked_order.exchange_order_id}",
@@ -758,7 +775,7 @@ class FarhadmarketExchange(ExchangeBase):
         """
         async for event_message in self._iter_user_event_queue():
             try:
-                if "result" not in event_message or "channel" not in event_message["result"]:
+                if "channel" not in event_message or "event" not in event_message:
                     continue
                 event = event_message["event"]
                 channel = event_message["channel"]
@@ -767,15 +784,24 @@ class FarhadmarketExchange(ExchangeBase):
                 if channel == "self.deals":
                     if event in ["subscribed", "unsubscribed"]:
                         pass
-                    elif event in ["init", "update", "insert"]:
-                        for trade_msg in body:
-                            await self._process_trade_message(trade_msg)
+                    elif event in ["init"]:
+                        trading_pairs = [farhadmarket_utils.convert_to_exchange_trading_pair(p) for p in
+                                         self._trading_pairs]
+                        for msg in body:
+                            if msg['market'] in trading_pairs:
+                                for trade_msg in msg['deals']:
+                                    await self._process_trade_message(trade_msg)
+                    elif event in ["insert"]:
+                        await self._process_trade_message(body)
                 elif channel == "self.orders":
                     if event in ["subscribed", "unsubscribed"]:
                         pass
-                    elif event in ["init", "insert"]:
-                        for order_msg in body:
+                    elif event in ["init"]:
+                        # for order_msg in (body["pendingOrders"] + body["finishedOrders"]):
+                        for order_msg in body[0]["pendingOrders"]:
                             self._process_order_message(order_msg)
+                    elif event in ["insert", "update"]:
+                        self._process_order_message(body)
                 elif channel == "self.balances":
                     if event in ["subscribed", "unsubscribed"]:
                         pass

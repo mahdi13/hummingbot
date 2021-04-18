@@ -53,7 +53,7 @@ class FarhadmarketOrderBookMessage(OrderBookMessage):
 
     @property
     def asks(self) -> List[OrderBookRow]:
-        asks = map(self.content["asks"], lambda ask: {"price": ask[0], "amount": ask[1]})
+        asks = map(self.content["asks"], lambda ask: [ask["price"], ask["amount"]])
 
         return [
             OrderBookRow(float(price), float(amount), self.update_id) for price, amount in asks
@@ -61,7 +61,7 @@ class FarhadmarketOrderBookMessage(OrderBookMessage):
 
     @property
     def bids(self) -> List[OrderBookRow]:
-        bids = map(self.content["bids"], lambda bid: {"price": bid[0], "amount": bid[1]})
+        bids = map(self.content["bids"], lambda bid: [bid["price"], bid["amount"]])
 
         return [
             OrderBookRow(float(price), float(amount), self.update_id) for price, amount in bids

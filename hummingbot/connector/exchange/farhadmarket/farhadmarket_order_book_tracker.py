@@ -11,10 +11,11 @@ import hummingbot.connector.exchange.farhadmarket.farhadmarket_constants as cons
 from hummingbot.core.data_type.order_book_message import OrderBookMessageType
 from hummingbot.logger import HummingbotLogger
 from hummingbot.core.data_type.order_book_tracker import OrderBookTracker
-from hummingbot.connector.exchange.coinzoom.coinzoom_order_book_message import CoinzoomOrderBookMessage
-from hummingbot.connector.exchange.coinzoom.coinzoom_active_order_tracker import CoinzoomActiveOrderTracker
-from hummingbot.connector.exchange.coinzoom.coinzoom_api_order_book_data_source import CoinzoomAPIOrderBookDataSource
-from hummingbot.connector.exchange.coinzoom.coinzoom_order_book import CoinzoomOrderBook
+from hummingbot.connector.exchange.farhadmarket.farhadmarket_order_book_message import FarhadmarketOrderBookMessage
+from hummingbot.connector.exchange.farhadmarket.farhadmarket_active_order_tracker import FarhadmarketActiveOrderTracker
+from hummingbot.connector.exchange.farhadmarket.farhadmarket_api_order_book_data_source import \
+    FarhadmarketAPIOrderBookDataSource
+from hummingbot.connector.exchange.farhadmarket.farhadmarket_order_book import FarhadmarketOrderBook
 
 
 class FarhadmarketOrderBookTracker(OrderBookTracker):
@@ -27,7 +28,7 @@ class FarhadmarketOrderBookTracker(OrderBookTracker):
         return cls._logger
 
     def __init__(self, trading_pairs: Optional[List[str]] = None, ):
-        super().__init__(CoinzoomAPIOrderBookDataSource(trading_pairs), trading_pairs)
+        super().__init__(FarhadmarketAPIOrderBookDataSource(trading_pairs), trading_pairs)
 
         self._ev_loop: asyncio.BaseEventLoop = asyncio.get_event_loop()
         self._order_book_snapshot_stream: asyncio.Queue = asyncio.Queue()
@@ -35,10 +36,9 @@ class FarhadmarketOrderBookTracker(OrderBookTracker):
         self._order_book_trade_stream: asyncio.Queue = asyncio.Queue()
         self._process_msg_deque_task: Optional[asyncio.Task] = None
         self._past_diffs_windows: Dict[str, Deque] = {}
-        self._order_books: Dict[str, CoinzoomOrderBook] = {}
-        self._saved_message_queues: Dict[str, Deque[CoinzoomOrderBookMessage]] = \
-            defaultdict(lambda: deque(maxlen=1000))
-        self._active_order_trackers: Dict[str, CoinzoomActiveOrderTracker] = defaultdict(CoinzoomActiveOrderTracker)
+        self._order_books: Dict[str, FarhadmarketOrderBook] = {}
+        self._saved_message_queues: Dict[str, Deque[FarhadmarketOrderBookMessage]] = defaultdict(lambda: deque(maxlen=1000))
+        self._active_order_trackers: Dict[str, FarhadmarketActiveOrderTracker] = defaultdict(FarhadmarketActiveOrderTracker)
         self._order_book_stream_listener_task: Optional[asyncio.Task] = None
         self._order_book_trade_listener_task: Optional[asyncio.Task] = None
 
@@ -53,20 +53,20 @@ class FarhadmarketOrderBookTracker(OrderBookTracker):
         """
         Update an order book with changes from the latest batch of received messages
         """
-        past_diffs_window: Deque[CoinzoomOrderBookMessage] = deque()
+        past_diffs_window: Deque[FarhadmarketOrderBookMessage] = deque()
         self._past_diffs_windows[trading_pair] = past_diffs_window
 
         message_queue: asyncio.Queue = self._tracking_message_queues[trading_pair]
-        order_book: CoinzoomOrderBook = self._order_books[trading_pair]
-        active_order_tracker: CoinzoomActiveOrderTracker = self._active_order_trackers[trading_pair]
+        order_book: FarhadmarketOrderBook = self._order_books[trading_pair]
+        active_order_tracker: FarhadmarketActiveOrderTracker = self._active_order_trackers[trading_pair]
 
         last_message_timestamp: float = time.time()
         diff_messages_accepted: int = 0
 
         while True:
             try:
-                message: CoinzoomOrderBookMessage = None
-                saved_messages: Deque[CoinzoomOrderBookMessage] = self._saved_message_queues[trading_pair]
+                message: FarhadmarketOrderBookMessage = None
+                saved_messages: Deque[FarhadmarketOrderBookMessage] = self._saved_message_queues[trading_pair]
                 # Process saved messages first if there are any
                 if len(saved_messages) > 0:
                     message = saved_messages.popleft()
@@ -88,7 +88,7 @@ class FarhadmarketOrderBookTracker(OrderBookTracker):
                         diff_messages_accepted = 0
                     last_message_timestamp = now
                 elif message.type is OrderBookMessageType.SNAPSHOT:
-                    past_diffs: List[CoinzoomOrderBookMessage] = list(past_diffs_window)
+                    past_diffs: List[FarhadmarketOrderBookMessage] = list(past_diffs_window)
                     # only replay diffs later than snapshot, first update active order with snapshot then replay diffs
                     replay_position = bisect.bisect_right(past_diffs, message)
                     replay_diffs = past_diffs[replay_position:]
